@@ -3,272 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EmojiChef - Standalone</title>
+    <title>EmojiChef v2.2 - Python/WASM</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
-    <script>
-        class EmojiCodec {
-            constructor(recipeType = "classic", useCompression = false) {
-                this.recipeType = recipeType;
-                this.useCompression = useCompression;
-                this.initializeIngredients();
-            }
-
-            initializeIngredients() {
-                const recipes = {
-                    "quick": { size: 64, start: 0x1F345 },    // Food emojis
-                    "light": { size: 128, start: 0x1F3B0 },   // Activity emojis
-                    "classic": { size: 256, start: 0x1F600 }, // Smiley emojis
-                    "gourmet": { size: 1024, start: 0x1F900 } // Extended emojis
-                };
-
-                const recipe = recipes[this.recipeType] || recipes["classic"];
-                this.baseSize = recipe.size;
-                this.bitsPerChunk = Math.log2(this.baseSize);
-                this.mask = (1 << this.bitsPerChunk) - 1;
-
-                // Create emoji maps
-                this.emojiMap = new Map();
-                this.reverseMap = new Map();
-                for (let i = 0; i < this.baseSize; i++) {
-                    const emoji = String.fromCodePoint(recipe.start + i);
-                    this.emojiMap.set(i, emoji);
-                    this.reverseMap.set(emoji, i);
-                }
-            }
-
-            stringToBytes(str) {
-                return new TextEncoder().encode(str);
-            }
-
-            bytesToString(bytes) {
-                return new TextDecoder().decode(bytes);
-            }
-
-            encode(data) {
-                try {
-                    // Convert string to bytes
-                    let bytes = this.stringToBytes(data);
-
-                    // Compress if enabled
-                    if (this.useCompression) {
-                        bytes = pako.deflate(bytes);
-                    }
-
-                    // Encode to emojis
-                    const result = [];
-                    let currentBits = 0;
-                    let currentValue = 0;
-
-                    for (const byte of bytes) {
-                        currentValue = (currentValue << 8) | byte;
-                        currentBits += 8;
-
-                        while (currentBits >= this.bitsPerChunk) {
-                            currentBits -= this.bitsPerChunk;
-                            const index = (currentValue >> currentBits) & this.mask;
-                            result.push(this.emojiMap.get(index));
-                            currentValue &= (1 << currentBits) - 1;
-                        }
-                    }
-
-                    // Handle remaining bits
-                    if (currentBits > 0) {
-                        const index = (currentValue << (this.bitsPerChunk - currentBits)) & this.mask;
-                        result.push(this.emojiMap.get(index));
-                    }
-
-                    return result.join('');
-                } catch (e) {
-                    throw new Error(`Encoding error: ${e.message}`);
-                }
-            }
-
-            decode(emojiData) {
-                try {
-                    const result = [];
-                    let currentBits = 0;
-                    let currentValue = 0;
-
-                    for (const emoji of emojiData) {
-                        const value = this.reverseMap.get(emoji);
-                        if (value === undefined) {
-                            throw new Error('Invalid emoji character');
-                        }
-
-                        currentValue = (currentValue << this.bitsPerChunk) | value;
-                        currentBits += this.bitsPerChunk;
-
-                        while (currentBits >= 8) {
-                            currentBits -= 8;
-                            const byte = (currentValue >> currentBits) & 0xFF;
-                            result.push(byte);
-                            currentValue &= (1 << currentBits) - 1;
-                        }
-                    }
-
-                    // Convert bytes to array
-                    const bytes = new Uint8Array(result);
-
-                    // Decompress if needed
-                    const processed = this.useCompression ? pako.inflate(bytes) : bytes;
-
-                    // Convert back to string
-                    return this.bytesToString(processed);
-                } catch (e) {
-                    throw new Error(`Decoding error: ${e.message}`);
-                }
-            }
-
-            getStats(original, encoded) {
-                const origBytes = this.stringToBytes(original).length;
-                const encLength = encoded.length;
-                return {
-                    originalBytes: origBytes,
-                    encodedLength: encLength,
-                    ratio: encLength / origBytes,
-                    bitsPerEmoji: this.bitsPerChunk
-                };
-            }
-        }
-
-        // UI state
-        let lastOperation = '';
-        let originalFilename = '';
-
-        function updateStats(stats) {
-            document.getElementById('original-size').textContent = stats.originalBytes;
-            document.getElementById('encoded-length').textContent = stats.encodedLength;
-            document.getElementById('ratio').textContent = stats.ratio.toFixed(2);
-            document.getElementById('stats').classList.remove('hidden');
-        }
-
-        function showResult(text, operation) {
-            const resultDiv = document.getElementById('result');
-            resultDiv.textContent = text;
-            resultDiv.classList.remove('hidden');
-            
-            lastOperation = operation;
-            
-            const saveButton = document.getElementById('save-button');
-            saveButton.classList.remove('hidden');
-            saveButton.textContent = `Save as ${getSaveFilename(operation)}`;
-        }
-
-        function encode() {
-            try {
-                const text = document.getElementById('input').value;
-                if (!text.trim()) {
-                    alert('Please enter some text or load a file first.');
-                    return;
-                }
-
-                const recipe = document.getElementById('recipe').value;
-                const compression = document.getElementById('compression').checked;
-
-                const codec = new EmojiCodec(recipe, compression);
-                const encoded = codec.encode(text);
-                const stats = codec.getStats(text, encoded);
-
-                showResult(encoded, 'encode');
-                updateStats(stats);
-            } catch (e) {
-                alert(`Error: ${e.message}`);
-            }
-        }
-
-        function decode() {
-            try {
-                const text = document.getElementById('input').value;
-                if (!text.trim()) {
-                    alert('Please enter emoji text or load a file first.');
-                    return;
-                }
-
-                const recipe = document.getElementById('recipe').value;
-                const compression = document.getElementById('compression').checked;
-
-                const codec = new EmojiCodec(recipe, compression);
-                const decoded = codec.decode(text);
-
-                showResult(decoded, 'decode');
-                document.getElementById('stats').classList.add('hidden');
-            } catch (e) {
-                alert(`Error: ${e.message}`);
-            }
-        }
-
-        function handleFile() {
-            const fileInput = document.getElementById('file');
-            const file = fileInput.files[0];
-            if (!file) return;
-
-            originalFilename = file.name;
-            
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                document.getElementById('input').value = e.target.result;
-                document.getElementById('file-info').textContent = `Loaded: ${file.name}`;
-                document.getElementById('file-info').classList.remove('hidden');
-            };
-            reader.readAsText(file);
-        }
-
-        function getSaveFilename(operation) {
-            if (!originalFilename) {
-                return operation === 'encode' ? 'text.emoji' : 'text.txt';
-            }
-
-            if (operation === 'encode') {
-                return originalFilename + '.emoji';
-            } else {
-                return originalFilename.endsWith('.emoji') 
-                    ? originalFilename.slice(0, -6) 
-                    : originalFilename + '.decoded';
-            }
-        }
-
-        function saveResult() {
-            const content = document.getElementById('result').textContent;
-            if (!content) return;
-
-            const filename = getSaveFilename(lastOperation);
-            const blob = new Blob([content], { type: 'text/plain' });
-            
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = filename;
-            
-            document.body.appendChild(a);
-            a.click();
-            
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
-
-            const feedback = document.getElementById('save-feedback');
-            feedback.textContent = `Saved as: ${filename}`;
-            feedback.classList.remove('hidden');
-            setTimeout(() => feedback.classList.add('hidden'), 3000);
-        }
-    </script>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
 </head>
 <body class="bg-gray-100 min-h-screen">
     <div class="container mx-auto px-4 py-8">
-        <!-- Header -->
         <header class="text-center mb-8">
-            <h1 class="text-4xl font-bold mb-2">👨‍🍳 EmojiChef</h1>
-            <p class="text-gray-600">Standalone Emoji Encoder</p>
+            <h1 class="text-4xl font-bold mb-2">👨‍🍳 EmojiChef v2.2</h1>
+            <p class="text-gray-600">Python/WASM Implementation</p>
+            <div id="loading" class="mt-4 text-blue-600">Loading Python runtime...</div>
         </header>
 
-        <!-- Main Content -->
         <div class="max-w-4xl mx-auto">
-            <div class="bg-white rounded-lg shadow-sm p-6">
-                <!-- Recipe Selection -->
-                <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Recipe</label>
-                    <select id="recipe" class="w-full rounded-md border-gray-300 shadow-sm">
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Recipe Type</label>
+                    <select id="recipe" class="w-full rounded-md border-gray-300 shadow-sm" disabled>
                         <option value="quick">Quick Bite (Base-64)</option>
                         <option value="light">Light Meal (Base-128)</option>
                         <option value="classic" selected>Classic Recipe (Base-256)</option>
@@ -276,57 +27,327 @@
                     </select>
                 </div>
 
-                <!-- Compression Toggle -->
-                <div class="mb-4">
+                <div class="mb-6">
                     <label class="flex items-center">
-                        <input type="checkbox" id="compression" class="rounded text-blue-600">
+                        <input type="checkbox" id="compression" class="rounded text-blue-600" disabled>
                         <span class="ml-2 text-sm text-gray-700">Use Compression</span>
                     </label>
                 </div>
 
-                <!-- File Input -->
-                <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Load File (Optional)</label>
-                    <input type="file" id="file" onchange="handleFile()" class="w-full">
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Load File</label>
+                    <input type="file" id="file" class="w-full" disabled onchange="handleFile()">
                     <div id="file-info" class="mt-2 text-sm text-gray-600 hidden"></div>
                 </div>
 
-                <!-- Text Input -->
-                <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Input Text</label>
-                    <textarea id="input" rows="4" class="w-full rounded-md border-gray-300 shadow-sm"></textarea>
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Input Text</label>
+                    <textarea id="input" rows="4" class="w-full rounded-md border-gray-300 shadow-sm" disabled></textarea>
                 </div>
 
-                <!-- Action Buttons -->
-                <div class="flex space-x-2 mb-4">
-                    <button onclick="encode()" class="flex-1 bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600">
+                <div class="flex space-x-4 mb-6">
+                    <button id="encode-btn" onclick="encode()" class="flex-1 bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600" disabled>
                         Encode
                     </button>
-                    <button onclick="decode()" class="flex-1 bg-green-500 text-white py-2 px-4 rounded-md hover:bg-green-600">
+                    <button id="decode-btn" onclick="decode()" class="flex-1 bg-green-500 text-white py-2 px-4 rounded-md hover:bg-green-600" disabled>
                         Decode
                     </button>
                 </div>
 
-                <!-- Results -->
                 <div id="result" class="hidden mb-4 p-4 bg-gray-50 rounded-md break-all"></div>
 
-                <!-- Save Button and Feedback -->
-                <button 
-                    id="save-button" 
-                    onclick="saveResult()" 
-                    class="hidden w-full bg-purple-500 text-white py-2 px-4 rounded-md hover:bg-purple-600 mb-2">
+                <button id="save-button" onclick="saveResult()" class="hidden w-full bg-purple-500 text-white py-2 px-4 rounded-md hover:bg-purple-600 mb-4">
                     Save Result
                 </button>
-                <div id="save-feedback" class="hidden text-sm text-green-600 text-center mb-4"></div>
 
-                <!-- Stats -->
-                <div id="stats" class="hidden text-sm text-gray-600">
+                <div id="stats" class="hidden text-sm text-gray-600 border-t pt-4">
+                    <h3 class="font-medium text-gray-900 mb-2">Statistics</h3>
                     <p>Original size: <span id="original-size">0</span> bytes</p>
                     <p>Encoded length: <span id="encoded-length">0</span> emojis</p>
-                    <p>Ratio: <span id="ratio">0</span></p>
+                    <p>Compression ratio: <span id="ratio">0</span></p>
                 </div>
             </div>
         </div>
     </div>
-</body>
-</html>
+
+    <script type="text/javascript">
+        let pyodide = null;
+        let lastOperation = '';
+
+        async function initializePython() {
+            try {
+                pyodide = await loadPyodide();
+                await pyodide.runPythonAsync(`
+import sys
+import json
+import base64
+globals()['_emojichef_globals'] = {}
+`);
+
+                await pyodide.runPythonAsync(`
+class EmojiCodec:
+    def __init__(self, recipe_type="classic", compression="NONE"):
+        self.recipe_type = recipe_type
+        self.compression = compression
+        self._initialize_ingredients()
+
+    def _initialize_ingredients(self):
+        recipes = {
+            "quick": (64, 0x1F345),
+            "light": (128, 0x1F3B0),
+            "classic": (256, 0x1F600),
+            "gourmet": (1024, 0x1F900)
+        }
+        
+        base_size, start_code = recipes.get(self.recipe_type, recipes["classic"])
+        self.emoji_map = {i: chr(start_code + i) for i in range(base_size)}
+        self.reverse_map = {v: k for k, v in self.emoji_map.items()}
+        self.base_size = base_size
+        self.bits_per_chunk = int.bit_length(base_size - 1)
+        self.mask = (1 << self.bits_per_chunk) - 1
+
+    def encode_binary(self, data, mime_type=None):
+        try:
+            b64_data = base64.b64encode(data).decode('utf-8')
+            metadata = {
+                'mime_type': mime_type,
+                'size': len(data),
+                'content': b64_data
+            }
+            return self.encode(json.dumps(metadata))
+        except Exception as e:
+            raise ValueError(f"Binary encoding error: {str(e)}")
+
+    def decode_binary(self, encoded):
+        try:
+            json_data = self.decode(encoded)
+            metadata = json.loads(json_data)
+            content = base64.b64decode(metadata['content'].encode('utf-8'))
+            return content, metadata.get('mime_type')
+        except Exception as e:
+            raise ValueError(f"Binary decoding error: {str(e)}")
+
+    def encode(self, data):
+        try:
+            byte_data = data.encode('utf-8')
+            result = []
+            current_bits = 0
+            current_value = 0
+            
+            for byte in byte_data:
+                current_value = (current_value << 8) | byte
+                current_bits += 8
+                
+                while current_bits >= self.bits_per_chunk:
+                    current_bits -= self.bits_per_chunk
+                    index = (current_value >> current_bits) & self.mask
+                    result.append(self.emoji_map[index])
+                    current_value &= (1 << current_bits) - 1
+            
+            if current_bits > 0:
+                index = (current_value << (self.bits_per_chunk - current_bits)) & self.mask
+                result.append(self.emoji_map[index])
+                
+            return ''.join(result)
+        except Exception as e:
+            raise ValueError(f"Encoding error: {str(e)}")
+
+    def decode(self, emoji_data):
+        try:
+            result = bytearray()
+            current_bits = 0
+            current_value = 0
+            
+            for emoji in emoji_data:
+                value = self.reverse_map[emoji]
+                current_value = (current_value << self.bits_per_chunk) | value
+                current_bits += self.bits_per_chunk
+                
+                while current_bits >= 8:
+                    current_bits -= 8
+                    byte = (current_value >> current_bits) & 0xFF
+                    result.append(byte)
+                    current_value &= (1 << current_bits) - 1
+            
+            return bytes(result).decode('utf-8')
+        except Exception as e:
+            raise ValueError(f"Decoding error: {str(e)}")
+
+    def get_stats(self, original, encoded):
+        orig_bytes = len(original.encode('utf-8'))
+        enc_len = len(encoded)
+        return {
+            'original_bytes': orig_bytes,
+            'encoded_length': enc_len,
+            'ratio': enc_len/orig_bytes if orig_bytes > 0 else 0
+        }
+
+_emojichef_globals['codec'] = EmojiCodec()
+`);
+                enableUI();
+                document.getElementById('loading').style.display = 'none';
+            } catch (error) {
+                document.getElementById('loading').textContent = `Error loading Python runtime: ${error.message}`;
+                console.error(error);
+            }
+        }
+
+        function enableUI() {
+            ['recipe', 'compression', 'file', 'input', 'encode-btn', 'decode-btn'].forEach(id => {
+                document.getElementById(id).disabled = false;
+            });
+        }
+
+        async function updateCodec() {
+            const recipe = document.getElementById('recipe').value;
+            const compression = document.getElementById('compression').checked ? 'ZLIB' : 'NONE';
+            await pyodide.runPythonAsync(`_emojichef_globals['codec'] = EmojiCodec("${recipe}", "${compression}")`);
+        }
+
+        async function handleFile() {
+            const fileInput = document.getElementById('file');
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            try {
+                const buffer = await file.arrayBuffer();
+                const bytes = new Uint8Array(buffer);
+                const base64Data = btoa(String.fromCharCode.apply(null, bytes));
+                
+                const input = document.getElementById('input');
+                input.dataset.fileName = file.name;
+                input.dataset.fileType = file.type || 'application/octet-stream';
+                input.dataset.binary = 'true';
+                input.value = base64Data;
+
+                document.getElementById('file-info').textContent = 
+                    `Loaded: ${file.name} (${input.dataset.fileType})`;
+                document.getElementById('file-info').classList.remove('hidden');
+            } catch (error) {
+                alert(`Error reading file: ${error.message}`);
+                console.error(error);
+            }
+        }
+
+        async function encode() {
+            try {
+                const input = document.getElementById('input');
+                const text = input.value;
+                if (!text.trim()) {
+                    alert('Please enter text or load a file.');
+                    return;
+                }
+
+                await updateCodec();
+                const isBinary = input.dataset.binary === 'true';
+                let encoded;
+
+                if (isBinary) {
+                    encoded = await pyodide.runPythonAsync(`
+                        _emojichef_globals['codec'].encode_binary(
+                            base64.b64decode('${text}'),
+                            '${input.dataset.fileType}'
+                        )
+                    `);
+                } else {
+                    encoded = await pyodide.runPythonAsync(`
+                        _emojichef_globals['codec'].encode(${JSON.stringify(text)})
+                    `);
+                }
+
+                const stats = await pyodide.runPythonAsync(`
+                    json.dumps(_emojichef_globals['codec'].get_stats(${JSON.stringify(text)}, ${JSON.stringify(encoded)}))
+                `);
+
+                showResult(encoded, 'encode');
+                updateStats(JSON.parse(stats));
+            } catch (error) {
+                alert(`Encoding error: ${error.message}`);
+                console.error(error);
+            }
+        }
+
+        async function decode() {
+            try {
+                const text = document.getElementById('input').value;
+                if (!text.trim()) {
+                    alert('Please enter emoji text or load a file.');
+                    return;
+                }
+
+                await updateCodec();
+
+                try {
+                    const [content, mimeType] = await pyodide.runPythonAsync(`
+                        decoded_content, mime_type = _emojichef_globals['codec'].decode_binary(${JSON.stringify(text)})
+                        [base64.b64encode(decoded_content).decode('utf-8'), mime_type]
+                    `);
+
+                    if (mimeType) {
+                        const binary = atob(content);
+                        const bytes = new Uint8Array(binary.length);
+                        for (let i = 0; i < binary.length; i++) {
+                            bytes[i] = binary.charCodeAt(i);
+                        }
+
+                        const blob = new Blob([bytes], { type: mimeType });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'decoded_file';
+                        a.click();
+                        URL.revokeObjectURL(url);
+
+                        showResult(`Binary file decoded (${mimeType})`, 'decode');
+                        return;
+                    }
+                } catch {
+                    const decoded = await pyodide.runPythonAsync(`
+                        _emojichef_globals['codec'].decode(${JSON.stringify(text)})
+                    `);
+                    showResult(decoded, 'decode');
+                }
+            } catch (error) {
+                alert(`Decoding error: ${error.message}`);
+                console.error(error);
+            }
+        }
+
+        function showResult(text, operation) {
+            lastOperation = operation;
+            const resultDiv = document.getElementById('result');
+            resultDiv.textContent = text;
+            resultDiv.classList.remove('hidden');
+            
+            const saveButton = document.getElementById('save-button');
+            saveButton.textContent = `Save as ${operation === 'encode' ? 'emoji' : 'text'}`;
+            saveButton.classList.remove('hidden');
+        }
+
+        function updateStats(stats) {
+            document.getElementById('stats').classList.remove('hidden');
+            document.getElementById('original-size').textContent = stats.original_bytes;
+            document.getElementById('encoded-length').textContent = stats.encoded_length;
+            document.getElementById('ratio').textContent = Number(stats.ratio).toFixed(2);
+        }
+
+        function saveResult() {
+            const content = document.getElementById('result').textContent;
+            if (!content) return;
+
+            const filename = lastOperation === 'encode' ? 'encoded.emoji' : 'decoded.txt';
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        }
+
+        window.addEventListener('load', initializePython);
+    </script>
+</body
